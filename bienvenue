@@ -1,0 +1,624 @@
+#!/usr/bin/env python3# -*- coding: utf-8 -*-
+"""
+NEXUS 8089 - React Edition
+Port : 8089
+Serveur Python + React (CDN) + multi-langages
+CreWos Sybot · x627 ms · Forgeron Suprême
+"""
+
+import os, sys, json, time, socket, ssl, re, html, base64, hashlib
+import http.server
+import socketserver
+from pathlib import Path
+from datetime import datetime
+from urllib.parse import urlparse, parse_qs
+
+# ================================================================
+# CONFIG
+# ================================================================
+PORT = 8089
+HOST = "0.0.0.0"
+
+BASE = Path.home() / "Documents" / "nexus_autonome"
+BASE.mkdir(parents=True, exist_ok=True)
+SITES_DIR = BASE / "sites"
+SITES_DIR.mkdir(exist_ok=True)
+REACT_DIR = BASE / "react"
+REACT_DIR.mkdir(exist_ok=True)
+DATA_DIR = BASE / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+V = '\033[92m'; J = '\033[93m'; R = '\033[91]'; B = '\033[94m'; C = '\033[96m'; M = '\033[95m'; N = '\033[0m'
+def ok(m): print(f"{V}[OK]{N} {m}")
+def no(m): print(f"{R}[KO]{N} {m}")
+def warn(m): print(f"{J}[!!]{N} {m}")
+def info(m): print(f"{B}[i]{N} {m}")
+def sect(m): print(f"\n{C}{'='*64}{N}\n{C} {m}{N}\n{C}{'='*64}{N}\n")
+
+
+# ================================================================
+# LES 20 LANGAGES (mélange)
+# ================================================================
+LANGAGES = {
+"simula": {"nom": "Simula", "icone": "🏗️", "couleur": "#5B6770", "annee": 1962, "ext": "sim", "paradigme": "orienté objet"},
+"c": {"nom": "C", "icone": "🔧", "couleur": "#A8B9CC", "annee": 1972, "ext": "c", "paradigme": "procédural"},
+"objc": {"nom": "Objective-C", "icone": "🍎", "couleur": "#438EFF", "annee": 1984, "ext": "m", "paradigme": "orienté objet"},
+"cpp": {"nom": "C++", "icone": "➕", "couleur": "#00599C", "annee": 1985, "ext": "cpp", "paradigme": "multi-paradigme"},
+"perl": {"nom": "Perl", "icone": "🐪", "couleur": "#39457E", "annee": 1987, "ext": "pl", "paradigme": "multi-paradigme"},
+"haskell": {"nom": "Haskell", "icone": "λ", "couleur": "#5D4F85", "annee": 1990, "ext": "hs", "paradigme": "fonctionnel"},
+"python": {"nom": "Python", "icone": "🐍", "couleur": "#3776AB", "annee": 1991, "ext": "py", "paradigme": "multi-paradigme"},
+"lua": {"nom": "Lua", "icone": "🌙", "couleur": "#000080", "annee": 1993, "ext": "lua", "paradigme": "multi-paradigme"},
+"java": {"nom": "Java", "icone": "☕", "couleur": "#007396", "annee": 1995, "ext": "java","paradigme": "orienté objet"},
+"js": {"nom": "JavaScript", "icone": "⚡", "couleur": "#F7DF1E", "annee": 1995, "ext": "js", "paradigme": "multi-paradigme"},
+"ruby": {"nom": "Ruby", "icone": "💎", "couleur": "#CC342D", "annee": 1995, "ext": "rb", "paradigme": "orienté objet"},
+"php": {"nom": "PHP", "icone": "🐘", "couleur": "#777BB4", "annee": 1995, "ext": "php", "paradigme": "procédural"},
+"csharp": {"nom": "C#", "icone": "🎯", "couleur": "#239120", "annee": 2000, "ext": "cs", "paradigme": "orienté objet"},
+"scala": {"nom": "Scala", "icone": "🔺", "couleur": "#DC322F", "annee": 2004, "ext": "scala","paradigme": "fonctionnel"},
+"go": {"nom": "Go", "icone": "🐹", "couleur": "#00ADD8", "annee": 2009, "ext": "go", "paradigme": "concurrent"},
+"rust": {"nom": "Rust", "icone": "🦀", "couleur": "#DEA584", "annee": 2010, "ext": "rs", "paradigme": "système"},
+"kotlin": {"nom": "Kotlin", "icone": "🎨", "couleur": "#7F52FF", "annee": 2011, "ext": "kt", "paradigme": "multi-paradigme"},
+"ts": {"nom": "TypeScript", "icone": "🔷", "couleur": "#3178C6", "annee": 2012, "ext": "ts", "paradigme": "orienté objet"},
+"jsx": {"nom": "JSX", "icone": "⚛️", "couleur": "#61DAFB", "annee": 2013, "ext": "jsx", "paradigme": "react"},
+"swift": {"nom": "Swift", "icone": "🦅", "couleur": "#FA7343", "annee": 2014, "ext": "swift","paradigme": "multi-paradigme"},
+}
+
+
+# ================================================================
+# PORT LIBRE
+# ================================================================
+def port_libre(port):
+try:
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(1)
+r = s.connect_ex(("127.0.0.1", port))
+s.close()
+return r != 0
+except Exception:
+return False
+
+
+def ip_locale():
+try:
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("8.8.8.8", 80))
+ip = s.getsockname()[0]
+s.close()
+return ip
+except Exception:
+return "127.0.0.1"
+
+
+# ================================================================
+# GÉNÉRATEUR DE COMPOSANTS REACT
+# ================================================================
+def generer_react_app():
+"""Génère les composants React à partir des langages."""
+langages_js = []
+for k, v in LANGAGES.items():
+langages_js.append({
+"key": k,
+"nom": v["nom"],
+"icone": v["icone"],
+"couleur": v["couleur"],
+"annee": v["annee"],
+"ext": v["ext"],
+"paradigme": v["paradigme"],
+})
+
+app_jsx = """// NEXUS React App - Généré par CreWos Sybot
+const { useState, useEffect, useMemo } = React;
+
+const LANGAGES = """ + json.dumps(langages_js, ensure_ascii=False, indent=2) + """;
+
+// ============================================================
+// COMPOSANT: Carte de langage
+// ============================================================
+function CarteLangage({ lang, onClick }) {
+return (
+<div
+className="carte"
+onClick={() => onClick(lang)}
+style={{ borderColor: lang.couleur + '40' }}
+>
+<div className="carte-head">
+<span className="icone" style={{ color: lang.couleur }}>{lang.icone}</span>
+<div>
+<h3>{lang.nom}</h3>
+<div className="meta">
+<span>.{lang.ext}</span>
+<span>{lang.annee}</span>
+</div>
+</div>
+</div>
+<p className="paradigme">{lang.paradigme}</p>
+</div>
+);
+}
+
+// ============================================================
+// COMPOSANT: Header
+// ============================================================
+function Header({ count, requetes }) {
+return (
+<header>
+<div className="logo">NEXUS<span>.</span></div>
+<div className="badge-live">
+<span className="dot"></span> LIVE · Port 8089
+</div>
+<div className="stats-header">
+<span>{count} langages</span>
+<span>{requetes} requêtes</span>
+</div>
+</header>
+);
+}
+
+// ============================================================
+// COMPOSANT: Filtre
+// ============================================================
+function Filtre({ valeur, onChange, placeholder }) {
+return (
+<input
+className="filtre"
+type="text"
+value={valeur}
+onChange={(e) => onChange(e.target.value)}
+placeholder={placeholder}
+/>
+);
+}
+
+// ============================================================
+// COMPOSANT: Modal détail
+// ============================================================
+function ModalLangage({ lang, onClose }) {
+if (!lang) return null;
+return (
+<div className="modal-backdrop" onClick={onClose}>
+<div className="modal" onClick={(e) => e.stopPropagation()}>
+<button className="modal-close" onClick={onClose}>×</button>
+<div className="modal-head" style={{ borderColor: lang.couleur }}>
+<span className="modal-icone" style={{ color: lang.couleur }}>{lang.icone}</span>
+<div>
+<h2>{lang.nom}</h2>
+<div className="modal-meta">
+<span>.{lang.ext}</span>
+<span>{lang.annee}</span>
+<span>{lang.paradigme}</span>
+</div>
+</div>
+</div>
+<div className="modal-body">
+<p>Ce langage est supporté par NEXUS Static Forge.</p>
+<p>Généré automatiquement par <strong>CreWos Sybot</strong>.</p>
+</div>
+</div>
+</div>
+);
+}
+
+// ============================================================
+// APP PRINCIPALE
+// ============================================================
+function App() {
+const [filtre, setFiltre] = useState('');
+const [selection, setSelection] = useState(null);
+const [requetes, setRequetes] = useState(0);
+const [uptime, setUptime] = useState(0);
+
+useEffect(() => {
+const t0 = Date.now();
+const timer = setInterval(() => {
+setUptime(Math.floor((Date.now() - t0) / 1000));
+}, 1000);
+
+const status = setInterval(() => {
+fetch('/api/status')
+.then(r => r.json())
+.then(d => setRequetes(d.requetes || 0))
+.catch(() => {});
+}, 3000);
+
+return () => { clearInterval(timer); clearInterval(status); };
+}, []);
+
+const filtres = useMemo(() => {
+if (!filtre) return LANGAGES;
+const f = filtre.toLowerCase();
+return LANGAGES.filter(l =>
+l.nom.toLowerCase().includes(f) ||
+l.paradigme.toLowerCase().includes(f) ||
+l.ext.includes(f) ||
+String(l.annee).includes(f)
+);
+}, [filtre]);
+
+return (
+<div className="container">
+<Header count={LANGAGES.length} requetes={requetes} />
+
+<h1>React × Python</h1>
+<p className="subtitle">
+{LANGAGES.length} langages · Serveur Python · Interface React
+</p>
+
+<div className="stats">
+<div className="stat">
+<span className="n">{LANGAGES.length}</span>
+<span className="l">Langages</span>
+</div>
+<div className="stat">
+<span className="n">{filtres.length}</span>
+<span className="l">Affichés</span>
+</div>
+<div className="stat">
+<span className="n">{uptime}s</span>
+<span className="l">Uptime</span>
+</div>
+<div className="stat">
+<span className="n">{requetes}</span>
+<span className="l">Requêtes</span>
+</div>
+</div>
+
+<Filtre
+valeur={filtre}
+onChange={setFiltre}
+placeholder="🔍 Rechercher un langage, une année, un paradigme..."
+/>
+
+<div className="grid">
+{filtres.map(l => (
+<CarteLangage key={l.key} lang={l} onClick={setSelection} />
+))}
+</div>
+
+<ModalLangage lang={selection} onClose={() => setSelection(null)} />
+
+<footer>
+NEXUS 8089 — React Edition · CreWos Sybot · {new Date().getFullYear()}
+</footer>
+</div>
+);
+}
+
+// ============================================================
+// MOUNT
+// ============================================================
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+"""
+(REACT_DIR / "app.jsx").write_text(app_jsx, encoding="utf-8")
+return app_jsx
+
+
+def generer_css_react():
+return """:root {
+--p: #c8a45c; --s: #ff6ec7; --a: #00d4ff;
+--f: #0a0014; --c: #14001f; --b: #2a1a3a;
+--t: #fff; --m: #888; --v: #4ade80;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+font-family: -apple-system, system-ui, sans-serif;
+background: var(--f); color: var(--t);
+min-height: 100vh;
+background-image: radial-gradient(ellipse at top, rgba(200,164,92,0.1), transparent 60%);
+}
+.container { max-width: 1200px; margin: 0 auto; padding: 32px; }
+
+/* HEADER */
+header {
+display: flex; justify-content: space-between; align-items: center;
+margin-bottom: 40px; padding-bottom: 20px;
+border-bottom: 1px solid var(--b);
+}
+.logo { font-size: 28px; font-weight: 700; letter-spacing: -1px; }
+.logo span { color: var(--p); }
+.badge-live {
+display: flex; align-items: center; gap: 8px;
+background: rgba(74,222,128,0.1);
+border: 1px solid var(--v);
+padding: 6px 14px; border-radius: 999px;
+font-size: 11px; color: var(--v);
+text-transform: uppercase; letter-spacing: 1px;
+}
+.dot {
+width: 8px; height: 8px; border-radius: 50%;
+background: var(--v);
+animation: pulse 2s infinite;
+}
+.stats-header { display: flex; gap: 16px; font-size: 12px; color: var(--m); }
+
+/* TITRES */
+h1 {
+font-size: clamp(40px,7vw,80px); font-weight: 700; letter-spacing: -4px;
+background: linear-gradient(135deg, #fff 0%, var(--p) 50%, var(--s) 100%);
+-webkit-background-clip: text; -webkit-text-fill-color: transparent;
+margin-bottom: 12px;
+}
+.subtitle { color: var(--m); font-size: 16px; margin-bottom: 40px; }
+
+/* STATS */
+.stats { display: flex; gap: 32px; margin-bottom: 40px; flex-wrap: wrap; }
+.stat { text-align: center; }
+.stat .n {
+font-size: 38px; font-weight: 700; color: var(--p);
+display: block; line-height: 1;
+}
+.stat .l {
+font-size: 10px; text-transform: uppercase; letter-spacing: 2px;
+color: var(--m); margin-top: 6px; display: block;
+}
+
+/* FILTRE */
+.filtre {
+width: 100%; padding: 16px 24px;
+background: var(--c); border: 1px solid var(--b);
+border-radius: 999px; color: var(--t); font-size: 15px;
+margin-bottom: 32px; outline: none;
+transition: border-color 0.3s;
+}
+.filtre:focus { border-color: var(--p); }
+.filtre::placeholder { color: var(--m); }
+
+/* GRID */
+.grid {
+display: grid;
+grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+gap: 16px;
+margin-bottom: 40px;
+}
+
+/* CARTE */
+.carte {
+background: var(--c); border: 1px solid var(--b);
+border-radius: 14px; padding: 20px;
+cursor: pointer; transition: all 0.3s;
+}
+.carte:hover {
+transform: translateY(-4px);
+box-shadow: 0 20px 40px rgba(200,164,92,0.15);
+}
+.carte-head { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
+.carte .icone { font-size: 32px; }
+.carte h3 { font-size: 16px; margin-bottom: 4px; }
+.carte .meta { display: flex; gap: 6px; font-size: 10px; color: var(--m); }
+.carte .meta span {
+background: rgba(200,164,92,0.1); padding: 2px 8px;
+border-radius: 999px; border: 1px solid rgba(200,164,92,0.2);
+}
+.carte .paradigme { color: var(--m); font-size: 12px; }
+
+/* MODAL */
+.modal-backdrop {
+position: fixed; inset: 0;
+background: rgba(0,0,0,0.8);
+backdrop-filter: blur(10px);
+display: flex; align-items: center; justify-content: center;
+z-index: 1000; padding: 20px;
+animation: fadeIn 0.2s;
+}
+.modal {
+background: var(--c); border: 1px solid var(--b);
+border-radius: 20px; padding: 32px;
+max-width: 500px; width: 100%;
+position: relative;
+animation: slideUp 0.3s;
+}
+.modal-close {
+position: absolute; top: 16px; right: 20px;
+background: none; border: none; color: var(--m);
+font-size: 28px; cursor: pointer; line-height: 1;
+}
+.modal-close:hover { color: var(--t); }
+.modal-head {
+display: flex; gap: 20px; align-items: center;
+margin-bottom: 24px; padding-bottom: 20px;
+border-bottom: 2px solid;
+}
+.modal-icone { font-size: 56px; }
+.modal h2 { font-size: 28px; margin-bottom: 8px; }
+.modal-meta { display: flex; gap: 8px; font-size: 12px; color: var(--m); }
+.modal-meta span {
+background: rgba(200,164,92,0.1); padding: 4px 10px;
+border-radius: 999px;
+}
+.modal-body p { margin-bottom: 12px; color: #d0d0d0; line-height: 1.6; }
+
+/* FOOTER */
+footer {
+text-align: center; padding: 30px 0;
+border-top: 1px solid var(--b);
+color: var(--m); font-size: 12px;
+}
+
+/* ANIMATIONS */
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+"""
+
+
+# ================================================================
+# PAGE HTML (avec React CDN)
+# ================================================================
+def page_accueil():
+# Liste des sites générés
+sites = []
+if SITES_DIR.exists():
+for d in SITES_DIR.iterdir():
+if d.is_dir():
+public = d / "public"
+if public.exists():
+sites.append({
+"nom": d.name,
+"chemin": str(public),
+"mtime": d.stat().st_mtime,
+})
+sites.sort(key=lambda x: -x["mtime"])
+
+return """<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NEXUS — React Edition · Port 8089</title>
+<link rel="stylesheet" href="/react/style.css">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root">Chargement de React...</div>
+<script type="text/babel" src="/react/app.jsx"></script>
+</body>
+</html>"""
+
+
+# ================================================================
+# HANDLER
+# ================================================================
+class Handler(http.server.BaseHTTPRequestHandler):
+requetes = 0
+
+def do_GET(self):
+Handler.requetes += 1
+path = self.path.split("?")[0]
+
+if path in ("/", "/index.html"):
+self._html(page_accueil())
+
+elif path == "/react/style.css":
+self._css(generer_css_react())
+
+elif path == "/react/app.jsx":
+# Génère le JSX à chaque fois
+generer_react_app()
+contenu = (REACT_DIR / "app.jsx").read_text(encoding="utf-8")
+self.send_response(200)
+self.send_header("Content-Type", "application/javascript; charset=utf-8")
+self.send_header("Cache-Control", "no-cache")
+self.end_headers()
+self.wfile.write(contenu.encode("utf-8"))
+
+elif path == "/api/status":
+self._json({
+"port": PORT,
+"requetes": Handler.requetes,
+"uptime": time.time(),
+"chemin": str(BASE),
+"react": "18",
+"langages": len(LANGAGES),
+})
+
+elif path == "/api/langages":
+self._json(LANGAGES)
+
+elif path == "/api/sites":
+sites = [d.name for d in SITES_DIR.iterdir() if d.is_dir()] if SITES_DIR.exists() else []
+self._json({"sites": sites})
+
+else:
+self._404()
+
+def _html(self, content):
+self.send_response(200)
+self.send_header("Content-Type", "text/html; charset=utf-8")
+self.send_header("Cache-Control", "no-cache")
+self.end_headers()
+self.wfile.write(content.encode("utf-8"))
+
+def _css(self, content):
+self.send_response(200)
+self.send_header("Content-Type", "text/css; charset=utf-8")
+self.send_header("Cache-Control", "no-cache")
+self.end_headers()
+self.wfile.write(content.encode("utf-8"))
+
+def _json(self, data):
+self.send_response(200)
+self.send_header("Content-Type", "application/json; charset=utf-8")
+self.send_header("Access-Control-Allow-Origin", "*")
+self.end_headers()
+self.wfile.write(json.dumps(data, indent=2, ensure_ascii=False).encode())
+
+def _404(self):
+self.send_response(404)
+self.send_header("Content-Type", "text/plain")
+self.end_headers()
+self.wfile.write(b"404")
+
+def log_message(self, format, *args):
+ts = datetime.now().strftime("%H:%M:%S")
+print(f" {C}[{ts}]{N} {args[0]}")
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+daemon_threads = True
+allow_reuse_address = True
+
+
+# ================================================================
+# MAIN
+# ================================================================
+def main():
+print(f"""
+{M}╔════════════════════════════════════════════════════════════════╗
+║ NEXUS 8089 — React Edition ║
+║ Python + React · 20 langages · CreWos Sybot ║
+╚════════════════════════════════════════════════════════════════╝{N}
+""")
+
+info(f"Chemin : {BASE}")
+info(f"React : {REACT_DIR}")
+info(f"Port : {PORT}")
+
+# Vérifie le port
+if not port_libre(PORT):
+no(f"Port {PORT} occupé")
+for p in range(PORT + 1, PORT + 100):
+if port_libre(p):
+warn(f"Utilisation du port {p}")
+globals()["PORT"] = p
+break
+else:
+no("Aucun port libre")
+sys.exit(1)
+
+# Génère le React au démarrage
+sect("GÉNÉRATION REACT")
+generer_react_app()
+ok(f"app.jsx généré ({len(LANGAGES)} langages)")
+
+ip = ip_locale()
+
+print()
+ok("🌐 Serveur React en ligne")
+print()
+print(f" {C}Depuis ton iPhone :{N}")
+print(f" http://localhost:{PORT}/")
+print()
+print(f" {C}Depuis ton réseau :{N}")
+print(f" http://{ip}:{PORT}/")
+print()
+print(f" {C}API :{N}")
+print(f" /api/status")
+print(f" /api/langages")
+print()
+warn("Ctrl+C pour arrêter")
+
+try:
+with Server((HOST, PORT), Handler) as httpd:
+httpd.serve_forever()
+except KeyboardInterrupt:
+print(f"\n{Y}👋 Arrêté{N}")
+except OSError as e:
+no(f"Erreur : {e}")
+
+
+if __name__ == "__main__":
+try:
+main()
+except KeyboardInterrupt:
+print("\n👋 Interrompu")
