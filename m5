@@ -1,0 +1,39 @@
+# 🧬 NEXUS
+
+> **20 languages. Zero dependencies. One file. Built from an iPhone.**
+
+[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Zero Deps](https://img.shields.io/badge/dependencies-0-3fb950?style=flat-square)](.)
+[![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS%20%7C%20Linux-58a6ff?style=flat-square)](.)
+[![Languages](https://img.shields.io/badge/languages-20-c8a45c?style=flat-square)](.)
+[![License](https://img.shields.io/badge/license-MIT-ff6ec7?style=flat-square)](LICENSE)
+
+---
+
+## 🎯 What is NEXUS?
+
+NEXUS is a **live multi-language server** that runs in **one Python file**.
+
+It serves a **GitHub-style interface** with:
+- **20 programming languages** (including Objective-C 1984, Perl 1987, Simula 1962)
+- **React-like UI** in pure vanilla JS (components, state, live updates)
+- **Live terminal** with animation
+- **SSE stream** for real-time stats
+- **Zero dependencies** — no npm, no pip, no build step
+
+Built on iOS via a-Shell. Runs anywhere Python 3 runs.
+
+---
+
+## 🚀 Quick Start
+
+```bash
+# Clone
+git clone https://github.com/Aissamohammedi88/nexus.git
+cd nexus
+
+# Run
+python3 nexus_8089.py
+
+# Open
+open http://localhost:8089/
