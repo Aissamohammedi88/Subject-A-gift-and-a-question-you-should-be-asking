@@ -1,0 +1,877 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+NEXUS 8089 - Live Server pour GitHub
+Port: 8089
+Design: GitHub + Apple + React-like
+CreWos Sybot · Forgeron Suprême ♾️
+
+Serveur qui :
+- Sert les sites générés par Nexus Static Forge
+- Montre les 20 langages en live
+- Interface React-like (composants, hooks)
+- Animations cinétiques Apple
+- Terminal intégré
+- API SSE (live updates)
+- Prêt pour PR GitHub
+
+Usage:
+python3 nexus_8089.py
+python3 nexus_8089.py --port 8089
+"""
+
+import os, sys, json, time, socket, ssl, re, html, threading
+import http.server
+import socketserver
+import argparse
+from pathlib import Path
+from datetime import datetime
+from urllib.parse import urlparse, unquote
+
+# ================================================================
+# CONFIG
+# ================================================================
+PORT_DEFAULT = 8089
+HOST = "0.0.0.0"
+
+BASE = Path.home() / "Documents" / "nexus_autonome"
+BASE.mkdir(parents=True, exist_ok=True)
+SITES_DIR = BASE / "sites"
+SITES_DIR.mkdir(exist_ok=True)
+LOG_DIR = BASE / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+# ================================================================
+# COULEURS
+# ================================================================
+V = '\033[92m'; J = '\033[93m'; R = '\033[91]'; B = '\033[94m'; C = '\033[96m'; M = '\033[95m'; N = '\033[0m'
+def ok(m): print(f"{V}[OK]{N} {m}")
+def no(m): print(f"{R}[KO]{N} {m}")
+def warn(m): print(f"{J}[!!]{N} {m}")
+def info(m): print(f"{B}[i]{N} {m}")
+def sect(m): print(f"\n{C}{'='*64}{N}\n{C} {m}{N}\n{C}{'='*64}{N}\n")
+
+
+# ================================================================
+# 20 LANGAGES (affichés en live)
+# ================================================================
+LANGAGES = [
+{"nom": "Simula", "icone": "🏗️", "annee": 1962, "couleur": "#5B6770", "paradigme": "orienté objet"},
+{"nom": "C", "icone": "🔧", "annee": 1972, "couleur": "#A8B9CC", "paradigme": "procédural"},
+{"nom": "Objective-C", "icone": "🍎", "annee": 1984, "couleur": "#438EFF", "paradigme": "orienté objet"},
+{"nom": "C++", "icone": "➕", "annee": 1985, "couleur": "#00599C", "paradigme": "multi-paradigme"},
+{"nom": "Perl", "icone": "🐪", "annee": 1987, "couleur": "#39457E", "paradigme": "multi-paradigme"},
+{"nom": "Haskell", "icone": "λ", "annee": 1990, "couleur": "#5D4F85", "paradigme": "fonctionnel"},
+{"nom": "Python", "icone": "🐍", "annee": 1991, "couleur": "#3776AB", "paradigme": "multi-paradigme"},
+{"nom": "Lua", "icone": "🌙", "annee": 1993, "couleur": "#000080", "paradigme": "multi-paradigme"},
+{"nom": "Java", "icone": "☕", "annee": 1995, "couleur": "#007396", "paradigme": "orienté objet"},
+{"nom": "JavaScript", "icone": "⚡", "annee": 1995, "couleur": "#F7DF1E", "paradigme": "multi-paradigme"},
+{"nom": "Ruby", "icone": "💎", "annee": 1995, "couleur": "#CC342D", "paradigme": "orienté objet"},
+{"nom": "PHP", "icone": "🐘", "annee": 1995, "couleur": "#777BB4", "paradigme": "procédural"},
+{"nom": "C#", "icone": "🎯", "annee": 2000, "couleur": "#239120", "paradigme": "orienté objet"},
+{"nom": "Scala", "icone": "🔺", "annee": 2004, "couleur": "#DC322F", "paradigme": "fonctionnel"},
+{"nom": "Go", "icone": "🐹", "annee": 2009, "couleur": "#00ADD8", "paradigme": "concurrent"},
+{"nom": "Rust", "icone": "🦀", "annee": 2010, "couleur": "#DEA584", "paradigme": "système"},
+{"nom": "Kotlin", "icone": "🎨", "annee": 2011, "couleur": "#7F52FF", "paradigme": "multi-paradigme"},
+{"nom": "TypeScript", "icone": "🔷", "annee": 2012, "couleur": "#3178C6", "paradigme": "orienté objet"},
+{"nom": "Swift", "icone": "🦅", "annee": 2014, "couleur": "#FA7343", "paradigme": "multi-paradigme"},
+{"nom": "Jibril", "icone": "🧬", "annee": 2026, "couleur": "#FF6EC7", "paradigme": "résonance cognitive"},
+]
+
+
+# ================================================================
+# COMPTEUR GLOBAL
+# ================================================================
+class Stats:
+def __init__(self):
+self.lock = threading.Lock()
+self.requetes = 0
+self.debut = time.time()
+self.clients_sse = []
+
+def inc(self):
+with self.lock:
+self.requetes += 1
+
+def get(self):
+with self.lock:
+return {
+"requetes": self.requetes,
+"uptime": int(time.time() - self.debut),
+"timestamp": datetime.now().isoformat(),
+}
+
+STATS = Stats()
+
+
+# ================================================================
+# UTILS
+# ================================================================
+def port_libre(port):
+try:
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(1)
+r = s.connect_ex(("127.0.0.1", port))
+s.close()
+return r != 0
+except Exception:
+return False
+
+
+def ip_locale():
+try:
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("8.8.8.8", 80))
+ip = s.getsockname()[0]
+s.close()
+return ip
+except Exception:
+return "127.0.0.1"
+
+
+def lister_sites():
+sites = []
+if SITES_DIR.exists():
+for d in SITES_DIR.iterdir():
+if d.is_dir():
+public = d / "public"
+if public.exists():
+sites.append({
+"nom": d.name,
+"chemin": str(public),
+"mtime": d.stat().st_mtime,
+"nb_fichiers": len(list(public.rglob("*"))),
+})
+return sorted(sites, key=lambda x: -x["mtime"])
+
+
+def age_humain(ts):
+age = time.time() - ts
+if age < 60:
+return f"il y a {int(age)}s"
+elif age < 3600:
+return f"il y a {int(age/60)}min"
+elif age < 86400:
+return f"il y a {int(age/3600)}h"
+else:
+return datetime.fromtimestamp(ts).strftime("%d/%m %H:%M")
+
+
+# ================================================================
+# PAGE PRINCIPALE (React-like, GitHub-style)
+# ================================================================
+def page_accueil():
+sites = lister_sites()
+
+sites_data = json.dumps([
+{"nom": s["nom"], "age": age_humain(s["mtime"]), "nb_fichiers": s["nb_fichiers"]}
+for s in sites
+], ensure_ascii=False)
+
+langages_data = json.dumps(LANGAGES, ensure_ascii=False)
+
+return """<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NEXUS · Live Server 8089</title>
+<style>
+:root {
+--bg-0: #0d1117;
+--bg-1: #161b22;
+--bg-2: #21262d;
+--border: #30363d;
+--text: #c9d1d9;
+--muted: #8b949e;
+--accent: #58a6ff;
+--primaire: #c8a45c;
+--secondaire: #ff6ec7;
+--vert: #3fb950;
+--rouge: #f85149;
+--jaune: #d29922;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+background: var(--bg-0);
+color: var(--text);
+min-height: 100vh;
+overflow-x: hidden;
+font-size: 14px;
+line-height: 1.6;
+}
+
+/* HEADER GITHUB-STYLE */
+.top-bar {
+background: var(--bg-1);
+border-bottom: 1px solid var(--border);
+padding: 12px 24px;
+display: flex;
+align-items: center;
+gap: 16px;
+position: sticky;
+top: 0;
+z-index: 100;
+backdrop-filter: blur(10px);
+background: rgba(22, 27, 34, 0.85);
+}
+.top-bar .brand {
+font-weight: 700;
+font-size: 15px;
+color: var(--text);
+text-decoration: none;
+display: flex;
+align-items: center;
+gap: 8px;
+}
+.top-bar .brand .dot {
+width: 8px;
+height: 8px;
+border-radius: 50%;
+background: var(--vert);
+box-shadow: 0 0 8px var(--vert);
+animation: pulse 2s infinite;
+}
+.top-bar nav { display: flex; gap: 20px; }
+.top-bar nav a {
+color: var(--text);
+text-decoration: none;
+font-size: 13px;
+opacity: 0.75;
+transition: 0.2s;
+}
+.top-bar nav a:hover { opacity: 1; color: var(--accent); }
+.top-bar .spacer { flex: 1; }
+.top-bar .status {
+font-family: "SF Mono", Monaco, monospace;
+font-size: 11px;
+color: var(--vert);
+padding: 4px 10px;
+border: 1px solid var(--border);
+border-radius: 999px;
+background: rgba(63, 185, 80, 0.1);
+}
+
+/* HERO */
+.hero {
+padding: 60px 24px 40px;
+text-align: center;
+background: radial-gradient(ellipse at top, rgba(88, 166, 255, 0.08), transparent 60%);
+}
+.hero h1 {
+font-size: clamp(32px, 5vw, 56px);
+font-weight: 700;
+letter-spacing: -1.5px;
+margin-bottom: 12px;
+background: linear-gradient(135deg, #fff 0%, var(--primaire) 50%, var(--secondaire) 100%);
+-webkit-background-clip: text;
+-webkit-text-fill-color: transparent;
+animation: fadeUp 0.6s ease;
+}
+.hero p {
+color: var(--muted);
+font-size: 16px;
+margin-bottom: 32px;
+animation: fadeUp 0.6s ease 0.1s both;
+}
+.hero .buttons {
+display: flex;
+gap: 12px;
+justify-content: center;
+flex-wrap: wrap;
+animation: fadeUp 0.6s ease 0.2s both;
+}
+.btn {
+display: inline-flex;
+align-items: center;
+gap: 8px;
+padding: 10px 20px;
+border-radius: 6px;
+font-size: 13px;
+font-weight: 600;
+text-decoration: none;
+cursor: pointer;
+border: 1px solid var(--border);
+background: var(--bg-2);
+color: var(--text);
+transition: all 0.2s;
+}
+.btn:hover {
+border-color: var(--accent);
+background: rgba(88, 166, 255, 0.1);
+}
+.btn.primary {
+background: var(--accent);
+color: #000;
+border-color: var(--accent);
+}
+.btn.primary:hover {
+background: #79c0ff;
+}
+
+/* STATS */
+.stats-grid {
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+gap: 16px;
+max-width: 1200px;
+margin: 0 auto 40px;
+padding: 0 24px;
+}
+.stat-card {
+background: var(--bg-1);
+border: 1px solid var(--border);
+border-radius: 8px;
+padding: 20px;
+transition: 0.3s;
+}
+.stat-card:hover {
+border-color: var(--accent);
+transform: translateY(-2px);
+}
+.stat-card .num {
+font-size: 28px;
+font-weight: 700;
+color: var(--primaire);
+display: block;
+line-height: 1;
+}
+.stat-card .label {
+font-size: 11px;
+text-transform: uppercase;
+letter-spacing: 1px;
+color: var(--muted);
+margin-top: 8px;
+display: block;
+}
+
+/* SECTIONS */
+.section {
+max-width: 1200px;
+margin: 0 auto 40px;
+padding: 0 24px;
+}
+.section h2 {
+font-size: 20px;
+font-weight: 600;
+margin-bottom: 20px;
+padding-bottom: 12px;
+border-bottom: 1px solid var(--border);
+color: var(--text);
+}
+
+/* GRILLE SITES */
+.sites-grid {
+display: grid;
+grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+gap: 16px;
+}
+.site-card {
+background: var(--bg-1);
+border: 1px solid var(--border);
+border-radius: 8px;
+padding: 20px;
+transition: 0.3s;
+text-decoration: none;
+color: inherit;
+display: block;
+}
+.site-card:hover {
+border-color: var(--accent);
+transform: translateY(-2px);
+box-shadow: 0 8px 24px rgba(88, 166, 255, 0.1);
+}
+.site-card h3 {
+font-size: 15px;
+font-weight: 600;
+color: var(--accent);
+margin-bottom: 8px;
+font-family: "SF Mono", Monaco, monospace;
+}
+.site-card .meta {
+font-size: 12px;
+color: var(--muted);
+margin-bottom: 12px;
+}
+.site-card .open {
+font-size: 12px;
+color: var(--vert);
+}
+
+/* LANGAGES */
+.langs-grid {
+display: grid;
+grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+gap: 10px;
+}
+.lang-card {
+background: var(--bg-1);
+border: 1px solid var(--border);
+border-radius: 6px;
+padding: 12px 16px;
+display: flex;
+align-items: center;
+gap: 10px;
+transition: 0.3s;
+font-family: "SF Mono", Monaco, monospace;
+font-size: 12px;
+}
+.lang-card:hover {
+border-color: var(--primaire);
+background: rgba(200, 164, 92, 0.05);
+}
+.lang-card .icon {
+font-size: 18px;
+line-height: 1;
+}
+.lang-card .nom {
+flex: 1;
+font-weight: 500;
+}
+.lang-card .annee {
+color: var(--muted);
+font-size: 11px;
+}
+
+/* TERMINAL */
+.terminal {
+background: #000;
+border: 1px solid var(--border);
+border-radius: 8px;
+padding: 0;
+overflow: hidden;
+font-family: "SF Mono", Monaco, monospace;
+font-size: 12px;
+}
+.terminal-header {
+background: var(--bg-2);
+padding: 8px 12px;
+display: flex;
+align-items: center;
+gap: 6px;
+border-bottom: 1px solid var(--border);
+}
+.terminal-header .dot {
+width: 10px;
+height: 10px;
+border-radius: 50%;
+}
+.terminal-header .dot.r { background: #ff5f56; }
+.terminal-header .dot.y { background: #ffbd2e; }
+.terminal-header .dot.g { background: #27c93f; }
+.terminal-header .title {
+margin-left: 12px;
+color: var(--muted);
+font-size: 11px;
+}
+.terminal-body {
+padding: 16px;
+min-height: 200px;
+max-height: 400px;
+overflow-y: auto;
+color: #e0e0e0;
+line-height: 1.6;
+}
+.terminal-body .line {
+animation: fadeIn 0.3s ease;
+}
+.terminal-body .prompt { color: var(--vert); }
+.terminal-body .cmd { color: #fff; }
+.terminal-body .out { color: var(--muted); }
+.terminal-body .err { color: var(--rouge); }
+
+/* ACCÈS */
+.acces-grid {
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+gap: 12px;
+}
+.acces-card {
+background: var(--bg-1);
+border: 1px solid var(--border);
+border-radius: 8px;
+padding: 16px;
+font-family: "SF Mono", Monaco, monospace;
+font-size: 12px;
+}
+.acces-card .label {
+color: var(--muted);
+font-size: 11px;
+text-transform: uppercase;
+letter-spacing: 1px;
+margin-bottom: 8px;
+}
+.acces-card a {
+color: var(--accent);
+text-decoration: none;
+word-break: break-all;
+}
+.acces-card a:hover { text-decoration: underline; }
+
+/* FOOTER */
+footer {
+max-width: 1200px;
+margin: 60px auto 0;
+padding: 32px 24px;
+border-top: 1px solid var(--border);
+text-align: center;
+color: var(--muted);
+font-size: 12px;
+}
+footer a { color: var(--accent); text-decoration: none; }
+
+/* ANIMATIONS */
+@keyframes fadeUp {
+from { opacity: 0; transform: translateY(20px); }
+to { opacity: 1; transform: none; }
+}
+@keyframes fadeIn {
+from { opacity: 0; }
+to { opacity: 1; }
+}
+@keyframes pulse {
+0%, 100% { opacity: 1; }
+50% { opacity: 0.5; }
+}
+@keyframes blink {
+0%, 49% { opacity: 1; }
+50%, 100% { opacity: 0; }
+}
+.cursor { display: inline-block; width: 8px; height: 14px; background: var(--vert); animation: blink 1s infinite; vertical-align: middle; }
+
+/* MOBILE */
+@media (max-width: 640px) {
+.top-bar { padding: 10px 16px; }
+.top-bar nav { display: none; }
+.hero { padding: 40px 16px 30px; }
+.section { padding: 0 16px; }
+.stats-grid { padding: 0 16px; }
+}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="top-bar">
+<a href="/" class="brand">
+<span class="dot"></span>
+NEXUS
+</a>
+<nav>
+<a href="#sites">Sites</a>
+<a href="#langages">Langages</a>
+<a href="#terminal">Terminal</a>
+<a href="#acces">Accès</a>
+</nav>
+<div class="spacer"></div>
+<div class="status">● LIVE :""" + str(PORT_DEFAULT) + """</div>
+</div>
+
+<!-- HERO -->
+<div class="hero">
+<h1>NEXUS Static Forge</h1>
+<p>Serveur live · 20 langages · React-like · Prêt pour GitHub</p>
+<div class="buttons">
+<a href="#sites" class="btn primary">📁 Voir les sites</a>
+<a href="/api/status" class="btn">📊 API status</a>
+<a href="/api/langages" class="btn">🌐 20 langages</a>
+</div>
+</div>
+
+<!-- STATS -->
+<div class="stats-grid">
+<div class="stat-card">
+<span class="num" id="nb-sites">0</span>
+<span class="label">Sites</span>
+</div>
+<div class="stat-card">
+<span class="num" id="nb-req">0</span>
+<span class="label">Requêtes</span>
+</div>
+<div class="stat-card">
+<span class="num" id="uptime">0s</span>
+<span class="label">Uptime</span>
+</div>
+<div class="stat-card">
+<span class="num">20</span>
+<span class="label">Langages</span>
+</div>
+</div>
+
+<!-- SITES -->
+<div class="section" id="sites">
+<h2>📁 Sites générés</h2>
+<div class="sites-grid" id="sites-grid">
+<p style="color: var(--muted);">Chargement...</p>
+</div>
+</div>
+
+<!-- LANGAGES -->
+<div class="section" id="langages">
+<h2>🌐 20 langages supportés</h2>
+<div class="langs-grid" id="langs-grid"></div>
+</div>
+
+<!-- TERMINAL -->
+<div class="section" id="terminal">
+<h2>💻 Terminal live</h2>
+<div class="terminal">
+<div class="terminal-header">
+<span class="dot r"></span>
+<span class="dot y"></span>
+<span class="dot g"></span>
+<span class="title">nexus@8089 — bash</span>
+</div>
+<div class="terminal-body" id="terminal-body">
+<div class="line"><span class="prompt">nexus@8089:</span><span class="cmd">~$</span> <span class="out">Initialisation du serveur...</span></div>
+<div class="line"><span class="out">[OK] Port 8089 en ligne</span></div>
+<div class="line"><span class="out">[OK] Sites disponibles</span></div>
+<div class="line"><span class="out">[OK] 20 langages chargés</span></div>
+<div class="line"><span class="prompt">nexus@8089:</span><span class="cmd">~$</span> <span class="cursor"></span></div>
+</div>
+</div>
+</div>
+
+<!-- ACCÈS -->
+<div class="section" id="acces">
+<h2>🌐 Points d'accès</h2>
+<div class="acces-grid" id="acces-grid"></div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+<p>NEXUS 8089 — CreWos Sybot · Forgeron Suprême ♾️ · <a href="/api/status">/api/status</a></p>
+<p style="margin-top: 8px;">Prêt pour PR GitHub · Mixed Languages · React-like</p>
+</footer>
+
+<script>
+// ================================================================
+// STATS LIVE
+// ================================================================
+const t0 = Date.now();
+
+function updateStats() {
+document.getElementById('uptime').textContent = Math.floor((Date.now()-t0)/1000) + 's';
+}
+
+fetch('/api/status').then(r => r.json()).then(d => {
+document.getElementById('nb-req').textContent = d.requetes || 0;
+}).catch(() => {});
+
+setInterval(() => {
+updateStats();
+fetch('/api/status').then(r => r.json()).then(d => {
+document.getElementById('nb-req').textContent = d.requetes || 0;
+}).catch(() => {});
+}, 2000);
+
+// ================================================================
+// SITES
+// ================================================================
+const SITES_DATA = """ + sites_data + """;
+
+function renderSites() {
+const grid = document.getElementById('sites-grid');
+if (!SITES_DATA.length) {
+grid.innerHTML = '<p style="color: var(--muted);">Aucun site généré. Crée-en un : python3 modele_09.py new "Mon Site"</p>';
+return;
+}
+grid.innerHTML = SITES_DATA.map(s => `
+<a class="site-card" href="/site/${s.nom}/">
+<h3>${s.nom}</h3>
+<div class="meta">${s.age} · ${s.nb_fichiers} fichiers</div>
+<div class="open">Ouvrir →</div>
+</a>
+`).join('');
+document.getElementById('nb-sites').textContent = SITES_DATA.length;
+}
+renderSites();
+
+// ================================================================
+// LANGAGES
+// ================================================================
+const LANGS_DATA = """ + langages_data + """;
+
+function renderLangs() {
+const grid = document.getElementById('langs-grid');
+grid.innerHTML = LANGS_DATA.map(l => `
+<div class="lang-card">
+<span class="icon">${l.icone}</span>
+<span class="nom" style="color: ${l.couleur};">${l.nom}</span>
+<span class="annee">${l.annee}</span>
+</div>
+`).join('');
+}
+renderLangs();
+
+// ================================================================
+// TERMINAL (messages live)
+// ================================================================
+const MESSAGES = [
+'Scan du système...',
+'20 langages détectés',
+'Sites indexés',
+'React-like components chargés',
+'Animations cinétiques actives',
+'Deep linking intégré',
+'Quantum engine ready',
+'Protocole compétition armé',
+];
+
+let msgIdx = 0;
+function addTerminalLine() {
+const body = document.getElementById('terminal-body');
+const lastCursor = body.querySelector('.cursor');
+if (lastCursor) lastCursor.parentElement.remove();
+
+const msg = MESSAGES[msgIdx % MESSAGES.length];
+msgIdx++;
+
+const line = document.createElement('div');
+line.className = 'line';
+line.innerHTML = `<span class="prompt">nexus@8089:</span><span class="cmd">~$</span> <span class="out">${msg}</span>`;
+body.appendChild(line);
+
+const cursorLine = document.createElement('div');
+cursorLine.className = 'line';
+cursorLine.innerHTML = `<span class="prompt">nexus@8089:</span><span class="cmd">~$</span> <span class="cursor"></span>`;
+body.appendChild(cursorLine);
+
+body.scrollTop = body.scrollHeight;
+
+// Limite à 10 lignes
+const lines = body.querySelectorAll('.line');
+if (lines.length > 10) lines[0].remove();
+}
+
+setInterval(addTerminalLine, 3000);
+
+// ================================================================
+// ACCÈS
+// ================================================================
+function renderAcces() {
+const ip = window.location.hostname;
+const port = window.location.port || 8089;
+const grid = document.getElementById('acces-grid');
+grid.innerHTML = `
+<div class="acces-card">
+<div class="label">Local</div>
+<a href="http://localhost:${port}/">http://localhost:${port}/</a>
+</div>
+<div class="acces-card">
+<div class="label">Réseau</div>
+<a href="http://${ip}:${port}/">http://${ip}:${port}/</a>
+</div>
+<div class="acces-card">
+<div class="label">API Status</div>
+<a href="/api/status">/api/status</a>
+</div>
+<div class="acces-card">
+<div class="label">API Sites</div>
+<a href="/api/sites">/api/sites</a>
+</div>
+<div class="acces-card">
+<div class="label">API Langages</div>
+<a href="/api/langages">/api/langages</a>
+</div>
+<div class="acces-card">
+<div class="label">API SSE (live)</div>
+<a href="/api/sse">/api/sse</a>
+</div>
+`;
+}
+renderAcces();
+
+// ================================================================
+// SMOOTH SCROLL
+// ================================================================
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+a.addEventListener('click', e => {
+e.preventDefault();
+const target = document.querySelector(a.getAttribute('href'));
+if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+});
+
+// ================================================================
+// SSE (live updates)
+// ================================================================
+try {
+const sse = new EventSource('/api/sse');
+sse.onmessage = e => {
+try {
+const data = JSON.parse(e.data);
+if (data.requetes) {
+document.getElementById('nb-req').textContent = data.requetes;
+}
+} catch(err) {}
+};
+} catch(e) {}
+
+console.log('NEXUS 8089 — CreWos Sybot ♾️');
+</script>
+</body>
+</html>"""
+
+
+# ================================================================
+# HANDLER HTTP
+# ================================================================
+class Handler(http.server.BaseHTTPRequestHandler):
+def do_GET(self):
+STATS.inc()
+path = self.path.split("?")[0]
+
+if path in ("/", "/index.html"):
+self._html(page_accueil())
+elif path == "/api/status":
+self._json(STATS.get())
+elif path == "/api/sites":
+self._json({"sites": lister_sites()})
+elif path == "/api/langages":
+self._json({"langages": LANGAGES})
+elif path == "/api/sse":
+self._sse()
+elif path.startswith("/site/"):
+self._servir_site(path)
+elif path.startswith("/static/"):
+self._servir_static(path)
+else:
+self._404()
+
+def do_HEAD(self):
+STATS.inc()
+self.send_response(200)
+self.end_headers()
+
+def _servir_site(self, path):
+# /site/<nom>/fichier
+parts = path[6:].split("/")
+if not parts or not parts[0]:
+self._404()
+return
+nom = unquote(parts[0])
+fichier = "/".join(parts[1:]) if len(parts) > 1 else "index.html"
+if not fichier or fichier == "/":
+fichier = "index.html"
+
+chemin = SITES_DIR / nom / "public" / fichier
+if not chemin.exists() or not chemin.is_file():
+# Essaie index.html
+chemin = SITES_DIR / nom / "public" / "index.html"
+if not chemin.exists():
+self._404()
+return
+
+# Content-Type
+ext = chemin.suffix.lower()
+types = {
+".html": "text/html; charset=utf-8",
+".css": "text/css; charset=utf-8",
+".js": "application/javascript; charset=utf-8",
+".json": "application/json",
+".png": "image/png",
+".jpg": "image/jpeg",
+".svg": "image/svg+xml",
